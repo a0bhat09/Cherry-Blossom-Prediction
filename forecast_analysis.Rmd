@@ -1,0 +1,511 @@
+---
+title: "Peak Bloom Prediction Analysis"
+author: "Arinjita Bhattacharyya"
+date: "2/28/2022"
+output:
+  html_document:
+    df_print: kable
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, error = FALSE, 
+                      message = FALSE,
+                      fig.align = 'center',
+                      out.width = '80%')
+```
+
+## Description
+
+In this analysis we demonstrate a very simple way of predicting the peak bloom date in the coming decade for all four locations required by the competition.
+The models used here are very simple and are using only the historic data for these four locations, but no other information or covariates.
+
+
+
+```{r}
+library(tidyverse)
+set.seed(1)
+library(tseries)
+library(forecast)
+library(Metrics)
+library(ggplot2)
+library(readr)
+library(WaveletArima)
+library(caret)
+library(nnfor)
+library(tsDyn)
+library(fracdiff)
+library(bsts)
+library(forecastHybrid)
+library(e1071)
+library(tseriesChaos)
+library(pracma)
+library(Kendall)
+library(nonlinearTseries)
+library(GeneCycle)
+library(fpp2)
+library(ggfortify)
+library(MTS)
+library(WaveletArima)
+library(smooth)
+```
+
+
+## Loading the data
+
+The data for each of the three main sites is provided as simple text file in CSV format.
+Each file contains the dates of the peak bloom of the cherry trees at the respective site, alongside the geographical location of the site.
+
+The six columns in each data file are
+
+* _location_ a human-readable location identifier (`string`).
+* _lat_ (approximate) latitude of the cherry trees (`double`).
+* _long_ (approximate) longitude of the cherry trees (`double`).
+* _alt_ (approximate) altitude of the cherry trees (`double`).
+* _year_ year of the observation (`integer`).
+* *bloom_date* date of peak bloom of the cherry trees (ISO 8601 date `string`). The "peak bloom date" may be defined differently for different sites
+* *bloom_doy* days since January 1st of the year until peak bloom (`integer`). January 1st corresponds to `1`.
+
+In R, the data files can be read with `read.csv()` and concatenated with the `bind_rows()` function:
+
+```{r}
+cherry <- read.csv("data/washingtondc.csv") %>% 
+  bind_rows(read.csv("data/liestal.csv")) %>% 
+  bind_rows(read.csv("data/kyoto.csv"))
+```
+
+
+
+```{r}
+cherry %>% 
+  group_by(location) %>% 
+  slice_tail(n = 3)
+```
+
+## Visualizing the time series
+
+
+```{r, fig.width=8, fig.height=3, out.width='100%', fig.cap="Time series of peak bloom of cherry trees since 1880 at three different sites."}
+cherry %>% 
+  filter(year >= 1880) %>%
+  ggplot(aes(x = year, y = bloom_doy)) +
+  geom_point() +
+  geom_step(linetype = 'dotted', color = 'gray50') +
+  scale_x_continuous(breaks = seq(1880, 2020, by = 20)) +
+  facet_grid(cols = vars(str_to_title(location))) +
+  labs(x = "Year", y = "Peak bloom (days since Jan 1st)")
+```
+
+## Predicting the peak bloom
+
+#Using univariate and hybrid Time series forecasting methods
+
+```{r}
+tsdata<-subset(cherry,year >= 1880)
+loc<-table(tsdata$location)
+tsky<-subset(tsdata,location=="kyoto")$bloom_doy
+tsli<-subset(tsdata,location=="liestal")$bloom_doy
+tsdc<-subset(tsdata,location=="washingtondc")$bloom_doy
+length(tsky)
+length(tsli)
+length(tsdc)
+tskytrain<-tsky[1:128]
+tskytest<-tsky[129:138]
+tslitrain<-tsli[1:118]
+tslitest<-tsli[119:128]
+tsdctrain<-tsdc[1:91]
+tsdctest<-tsdc[92:101]
+######################## PLOTS 
+
+autoplot(ts(tsky))+ ggtitle('Kyoto')+ylab('Day of the years')+xlab('Years ')+autolayer(ts(tsky))
+diffset = diff(tsky, differences = ndiffs(tsky))
+ggAcf(tsky)+geom_point(color = 'navy blue') +ggtitle("ACF plot-Kyoto")
+ggPacf(tsky) + geom_point(color = 'navy blue') + ggtitle("PACF plot-Kyoto")
+autoplot(ts(tsli))+ ggtitle('Liestal')+ylab('Day of the years')+xlab('Years ')+autolayer(ts(tsli))
+diffset = diff(tsli, differences = ndiffs(tsli))
+ggAcf(tsli)+geom_point(color = 'navy blue') +ggtitle("ACF plot-Liestal")
+ggPacf(tsky) + geom_point(color = 'navy blue') + ggtitle("PACF plot-Liestal")
+autoplot(ts(tsdc))+ ggtitle('Washington DC')+ylab('Day of the years')+xlab('Years ')+autolayer(ts(tsdc))
+diffset = diff(tsdc, differences = ndiffs(tsdc))
+ggAcf(tsdc)+geom_point(color = 'navy blue') +ggtitle("ACF plot-Washington DC")
+ggPacf(tsdc) + geom_point(color = 'navy blue') + ggtitle("PACF plot-Washington DC")
+################# Statistical Tests ############################
+
+fracdiff(tsky)
+fracdiff(tsli)
+fracdiff(tsdc)
+hurstexp(tsky)
+hurstexp(tsli)
+hurstexp(tsdc)
+Box.test(tsky, lag = 1, type = c("Box-Pierce"))
+Box.test(tsli, lag = 1, type = c("Box-Pierce"))
+Box.test(tsdc, lag = 1, type = c("Box-Pierce"))
+
+skewness(tsky)
+skewness(tsli) 
+skewness(tsdc) 
+kurtosis(tsky)
+kurtosis(tsli)
+kurtosis(tsdc)
+
+
+
+
+
+
+
+
+
+############ARIMA
+#########Train test data
+
+f1ky = auto.arima(as.ts(tskytrain))
+fof1ky =  as.numeric(predict(f1ky, 10)$pred)
+er1ky<-round(mean(abs(fof1ky- tskytest)),2)
+
+f1li= auto.arima(as.ts(tslitrain))
+fof1li =  as.numeric(predict(f1li, 10)$pred)
+er1li<-round(mean(abs(fof1li- tslitest)),2)
+
+
+f1dc = auto.arima(as.ts(tsdctrain))
+fof1dc =  as.numeric(predict(f1dc, 10)$pred)
+er1dc<-round(mean(abs(fof1dc- tsdctest)),2)
+
+
+
+##########full data ARIMA
+
+fit_arimaky = auto.arima(ts(tsky),trace = TRUE)
+forecast_arimaky= predict(fit_arimaky,10)
+fit_arimali = auto.arima(ts(tsli),trace = TRUE)
+
+forecast_arimali= predict(fit_arimali,10)
+
+fit_arimadc = auto.arima(ts(tsdc),trace = TRUE)
+
+forecast_arimadc= predict(fit_arimadc,10)
+
+##############Theta model
+#########Train test data
+
+f2ky = thetaf(as.ts(tskytrain))
+fof2ky =  as.numeric(predict(f2ky, 10)$mean)
+er2ky<-round(mean(abs(fof2ky- tskytest)),2)
+
+f2li= thetaf(as.ts(tslitrain))
+fof2li =   as.numeric(predict(f2li, 10)$mean)
+er2li<-round(mean(abs(fof2li- tslitest)),2)
+
+
+f2dc = thetaf(as.ts(tsdctrain))
+fof2dc =   as.numeric(predict(f2dc, 10)$mean)
+er2dc<-round(mean(abs(fof2dc- tsdctest)),2)
+
+############full data Theta 
+
+fit_thetaky=thetaf(as.ts(tsky), h=10)
+forecast_thetaky= predict(fit_thetaky,10)$mean
+fit_thetali=thetaf(as.ts(tsli), h=10)
+forecast_thetali= predict(fit_thetali,10)$mean
+
+fit_thetadc=thetaf(as.ts(tsdc), h=10)
+forecast_thetadc= predict(fit_thetadc,10)$mean
+##################TBATS#######################
+
+#########Train test data
+
+f5ky = tbats(as.ts(tskytrain))
+fof5ky =  as.numeric(predict(f5ky, 10)$mean)
+er5ky<-round(mean(abs(fof5ky- tskytest)),2)
+
+f5li= tbats(as.ts(tslitrain))
+fof5li =  as.numeric(predict(f5li, 10)$mean)
+er5li<-round(mean(abs(fof5li- tslitest)),2)
+
+
+f5dc = tbats(as.ts(tsdctrain))
+fof5dc =  as.numeric(predict(f5dc, 10)$mean)
+er5dc<-round(mean(abs(fof5dc- tsdctest)),2)
+
+############full data TBATS
+fit_tbatsky = tbats(as.ts(tsky))
+forecast_tbatsky=forecast::forecast(fit_tbatsky, h=10)
+fit_tbatsli = tbats(as.ts(tsli))
+forecast_tbatsli=forecast::forecast(fit_tbatsli, h=10)
+fit_tbatsdc = tbats(as.ts(tsdc))
+forecast_tbatsdc=forecast::forecast(fit_tbatsdc, h=10)
+
+######################### Hybrid Models ########################Hybrid ARIMA-ARNN
+#########Train test data
+#f1ky = auto.arima(as.ts(tskytrain))
+f6ky = nnetar(f1ky$residuals, repeats = 500, lambda="auto")
+fof6ky1 =  forecast::forecast(f6ky, h = 10)
+fof6ky =  predict(f1ky, 10)$pred+ fof6ky1$mean
+er6ky<-round(mean(abs(fof6ky- tskytest)),2)
+
+f6li = nnetar(f1li$residuals, repeats = 500, lambda="auto")
+fof6li1 =  forecast::forecast(f6li, h = 10)
+fof6li =  predict(f1li, 10)$pred+ fof6li1$mean
+er6li<-round(mean(abs(fof6li- tslitest)),2)
+
+
+f6dc = nnetar(f1dc$residuals, repeats = 500, lambda="auto")
+fof6dc1 =  forecast::forecast(f6dc, h = 10)
+fof6dc =  predict(f1dc, 10)$pred+ fof6dc1$mean
+er6dc<-round(mean(abs(fof6dc- tsdctest)),2)
+
+############full data
+### Hybrid ARIMA-ARNN
+
+fit_res_ARNNky = nnetar(fit_arimaky$residuals, repeats = 500, lambda="auto")
+pred_res_ARNNky = forecast::forecast(fit_res_ARNNky, h = 10)
+pred_arima_arnnky =  predict(fit_arimaky, 10)$pred+ pred_res_ARNNky$mean
+
+fit_res_ARNNli = nnetar(fit_arimali$residuals, repeats = 500, lambda="auto")
+pred_res_ARNNli = forecast::forecast(fit_res_ARNNli, h = 10)
+pred_arima_arnnli = predict(fit_arimali, 10)$pred+
+pred_res_ARNNli$mean
+fit_res_ARNNdc = nnetar(fit_arimadc$residuals, repeats = 500, lambda="auto")
+pred_res_ARNNdc = forecast::forecast(fit_res_ARNNdc, h = 10)
+pred_arima_arnndc = predict(fit_arimadc, 10)$pred+
+  pred_res_ARNNdc$mean
+### #############Hybrid ARIMA-WARIMA
+f7ky = WaveletFittingarma(f1ky$residuals, Waveletlevels = floor(log(length(tskytrain))), boundary = 'periodic', FastFlag = TRUE, MaxARParam = 5, MaxMAParam = 5, NForecast = 10)
+fof7ky = predict(f1ky, 10)$pred + f7ky$Finalforecast
+er7ky<-round(mean(abs(fof7ky- tskytest)),2)
+
+f7li = WaveletFittingarma(f1li$residuals, Waveletlevels = floor(log(length(tslitrain))), boundary = 'periodic', FastFlag = TRUE, MaxARParam = 5, MaxMAParam = 5, NForecast = 10)
+fof7li = predict(f1li, 10)$pred + f7li$Finalforecast
+er7li<-round(mean(abs(fof7li- tslitest)),2)
+
+f7dc = WaveletFittingarma(f1dc$residuals, Waveletlevels = floor(log(length(tsdctrain))), boundary = 'periodic', FastFlag = TRUE, MaxARParam = 5, MaxMAParam = 5, NForecast = 10)
+fof7dc = predict(f1dc, 10)$pred + f7dc$Finalforecast
+er7dc<-round(mean(abs(fof7dc- tsdctest)),2)
+
+###########full data
+fit_res_wbfky = WaveletFittingarma(fit_arimaky$residuals, Waveletlevels = floor(log(length(tsky))), boundary = 'periodic', FastFlag = TRUE, MaxARParam = 5, MaxMAParam = 5, NForecast = 10)
+pred_arima_wbfky = predict(fit_arimaky, 10)$pred + fit_res_wbfky$Finalforecast
+
+fit_res_wbfdc = WaveletFittingarma(fit_arimadc$residuals, Waveletlevels = floor(log(length(tsdc))), boundary = 'periodic', FastFlag = TRUE, MaxARParam = 5, MaxMAParam = 5, NForecast = 10)
+pred_arima_wbfdc =predict(fit_arimadc, 10)$pred + fit_res_wbfdc$Finalforecast
+
+fit_res_wbfli = WaveletFittingarma(fit_arimali$residuals, Waveletlevels = floor(log(length(tsli))), boundary = 'periodic', FastFlag = TRUE, MaxARParam = 5, MaxMAParam = 5, NForecast = 10)
+pred_arima_wbfli = predict(fit_arimali, 10)$pred + fit_res_wbfli$Finalforecast
+####################Hybrid Theta ARNN
+##########Train Test data
+f8ky<-thetaf(as.ts(tskytrain), h=10)
+f8resky<-nnetar(f8ky$residuals, repeats = 500)
+pred8ky = forecast::forecast(f8resky, h = 10)
+fof8ky = predict(f8ky, 10)$mean + pred8ky$mean
+er8ky<-round(mean(abs(fof8ky- tskytest)),2)
+
+f8li<-thetaf(as.ts(tslitrain), h=10)
+f8resli<-nnetar(f8li$residuals, repeats = 500)
+pred8li = forecast::forecast(f8resli, h = 10)
+fof8li= predict(f8li, 10)$mean + pred8li$mean
+er8li<-round(mean(abs(fof8li- tslitest)),2)
+
+f8dc<-thetaf(as.ts(tsdctrain), h=10)
+f8resdc<-nnetar(f8dc$residuals, repeats = 500)
+pred8dc = forecast::forecast(f8resdc, h = 10)
+fof8dc= predict(f8dc, 10)$mean + pred8dc$mean
+er8dc<-round(mean(abs(fof8dc- tsdctest)),2)
+############Full data
+fit_thetaky=thetaf(as.ts(tsky), h=10)
+fit_res_TARNNky = nnetar(fit_thetaky$residuals, repeats = 500)
+pred_res_TARNNky = forecast::forecast(fit_res_TARNNky, h = 10)
+pred_theta_arnnky = predict(fit_thetaky, 10)$mean + pred_res_TARNNky$mean
+
+fit_thetali=thetaf(as.ts(tsli), h=10)
+fit_res_TARNNli = nnetar(fit_thetali$residuals, repeats = 500)
+pred_res_TARNNli = forecast::forecast(fit_res_TARNNli, h = 10)
+pred_theta_arnnli = predict(fit_thetali, 10)$mean + pred_res_TARNNli$mean
+fit_thetadc=thetaf(as.ts(tsdc), h=10)
+fit_res_TARNNdc = nnetar(fit_thetadc$residuals, repeats = 500)
+pred_res_TARNNdc = forecast::forecast(fit_res_TARNNdc, h = 10)
+pred_theta_arnndc = predict(fit_thetadc, 10)$mean + pred_res_TARNNdc$mean
+
+################### SETAR ###########################
+############train test
+f9ky<-setar(as.ts(tskytrain), m = 4)
+fof9ky<-predict(f9ky, n.ahead = 10)
+er9ky<-round(mean(abs(fof9ky- tskytest)),2)
+
+f9li<-setar(as.ts(tslitrain), m = 4)
+fof9li<-predict(f9li, n.ahead = 10)
+er9li<-round(mean(abs(fof9li- tslitest)),2)
+
+f9dc<-setar(as.ts(tsdctrain), m = 4)
+fof9dc<-predict(f9dc, n.ahead = 10)
+er9dc<-round(mean(abs(fof9dc- tsdctest)),2)
+############Full data
+fit_SETARky = setar(as.ts(tsky), m = 4)
+forecast_SETARky = predict(fit_SETARky, n.ahead = 10)
+fit_SETARli = setar(as.ts(tsli), m = 4)
+forecast_SETARli = predict(fit_SETARli, n.ahead = 10)
+fit_SETARdc = setar(as.ts(tsdc), m = 4)
+forecast_SETARdc = predict(fit_SETARdc, n.ahead = 10)
+################### MLP/ANN ###################################
+############train test
+f10ky<-mlp(as.ts(tskytrain), hd = 5, reps = 1)
+fof10ky<-as.numeric(forecast::forecast(f10ky, h=10)$mean)
+er10ky<-round(mean(abs(fof10ky- tskytest)),2)
+
+f10li<-mlp(as.ts(tslitrain), hd = 5, reps = 1)
+fof10li<-as.numeric(forecast::forecast(f10li, h=10)$mean)
+er10li<-round(mean(abs(fof10li- tslitest)),2)
+
+f10dc<-mlp(as.ts(tsdctrain), hd = 5, reps = 1)
+fof10dc<-as.numeric(forecast::forecast(f10dc, h=10)$mean)
+er10dc<-round(mean(abs(fof10dc- tsdctest)),2)
+############Full data
+
+fit_ANNky = mlp(as.ts(tsky), hd = 5, reps = 1)
+forecast_ANNky = forecast::forecast(fit_ANNky, h=10)
+fit_ANNli = mlp(as.ts(tsli), hd = 5, reps = 1)
+forecast_ANNli = forecast::forecast(fit_ANNli, h=10)
+fit_ANNdc = mlp(as.ts(tsdc), hd = 5, reps = 1)
+forecast_ANNdc = forecast::forecast(fit_ANNdc, h=10)
+##################BSTS#############
+###########train-test
+s11ky <- AddLocalLinearTrend(list(), as.ts(tskytrain))
+f11ky = bsts(as.ts(tskytrain),state.specification = s11ky, niter = 1000)
+fof11ky <- predict(f11ky, horizon = 10)
+b11ky <- SuggestBurn(0.1, f11ky)
+ffof11ky=as.numeric(-colMeans(f11ky$one.step.prediction.errors[-(1:b11ky),])+as.ts(tskytrain))
+er11ky<-round(mean(abs(ffof11ky- tskytest)),2)
+
+
+
+s11li <- AddLocalLinearTrend(list(), as.ts(tslitrain))
+f11li = bsts(as.ts(tslitrain),state.specification = s11li, niter = 1000)
+fof11li <- predict(f11li, horizon = 10)
+b11li <- SuggestBurn(0.1, f11li)
+ffof11li=as.numeric(-colMeans(f11li$one.step.prediction.errors[-(1:b11li),])+as.ts(tslitrain))
+er11li<-round(mean(abs(ffof11li- tslitest)),2)
+
+
+s11dc <- AddLocalLinearTrend(list(), as.ts(tsdctrain))
+f11dc = bsts(as.ts(tsdctrain),state.specification = s11dc, niter = 1000)
+fof11dc <- predict(f11dc, horizon = 10)
+b11dc <- SuggestBurn(0.1, f11dc)
+ffof11dc=as.numeric(-colMeans(f11dc$one.step.prediction.errors[-(1:b11dc),])+as.ts(tsdctrain))
+er11dc<-round(mean(abs(ffof11dc- tsdctest)),2)
+##################full data
+ssky <- AddLocalLinearTrend(list(), as.ts(tsky))
+fit_bstsky = bsts(as.ts(tsky),state.specification = ssky, niter = 1000)
+forecast_BSTSky <- predict(fit_bstsky, horizon = 10)
+burnky <- SuggestBurn(0.1, fit_bstsky)
+fitted_bstsky=as.numeric(-colMeans(fit_bstsky$one.step.prediction.errors[-(1:burnky),])+as.ts(tsky))
+
+ssli <- AddLocalLinearTrend(list(), as.ts(tsli))
+fit_bstsli = bsts(as.ts(tsli),state.specification = ssli, niter = 1000)
+forecast_BSTSli <- predict(fit_bstsli, horizon = 10)
+burnli <- SuggestBurn(0.1, fit_bstsli)
+fitted_bstsli=as.numeric(-colMeans(fit_bstsli$one.step.prediction.errors[-(1:burnli),])+as.ts(tsli))
+
+ssdc <- AddLocalLinearTrend(list(), as.ts(tsdc))
+fit_bstsdc = bsts(as.ts(tsdc),state.specification = ssdc, niter = 1000)
+forecast_BSTSdc <- predict(fit_bstsdc, horizon = 10)
+burndc <- SuggestBurn(0.1, fit_bstsdc)
+fitted_bstsdc=as.numeric(-colMeans(fit_bstsdc$one.step.prediction.errors[-(1:burndc),])+as.ts(tsdc))
+#########################ARFIMA###############################train -test
+f12ky<-arfima(as.ts(tskytrain))
+fof12ky<-as.numeric(forecast::forecast(f12ky, h=10)$mean)
+er12ky<-round(mean(abs(fof12ky- tskytest)),2)
+
+f12li<-arfima(as.ts(tslitrain))
+fof12li<-as.numeric(forecast::forecast(f12li, h=10)$mean)
+er12li<-round(mean(abs(fof12li- tslitest)),2)
+
+
+f12dc<-arfima(as.ts(tsdctrain))
+fof12dc<-as.numeric(forecast::forecast(f12dc, h=10)$mean)
+er12dc<-round(mean(abs(fof12dc- tsdctest)),2)
+
+
+
+###################full data
+fit_ARFIMAky=arfima( as.ts(tsky))
+forecast_ARFIMAky = forecast::forecast(fit_ARFIMAky, h=10)
+
+fit_ARFIMAli=arfima( as.ts(tsli))
+forecast_ARFIMAli = forecast::forecast(fit_ARFIMAli, h=10)
+
+fit_ARFIMAdc=arfima( as.ts(tsdc))
+forecast_ARFIMAdc = forecast::forecast(fit_ARFIMAdc, h=10)
+
+
+#################collect all errors 
+error_ky<-c(er1ky,er2ky,er5ky,er6ky,er7ky,
+            er8ky,er9ky,er10ky,er11ky,er12ky)
+error_li<-c(er1li,er2li,er5li,er6li,er7li,
+            er8li,er9li,er10li,er11li,er12li)
+error_dc<-c(er1dc,er2dc,er5dc,er6dc,er7dc,
+            er8dc,er9dc,er10dc,er11dc,er12dc)
+
+Error<-cbind(error_ky,error_li,error_dc)
+write.csv(Error,"errorfile.csv")
+
+#Collect Predictions for each location by methods 
+ky<-cbind(2022:2031,forecast_arimaky$pred,forecast_thetaky,forecast_tbatsky$mean,pred_arima_arnnky,pred_arima_wbfky,pred_theta_arnnky,
+          forecast_SETARky,forecast_ANNky,forecast_BSTSky$mean,forecast_ARFIMAky$mean)
+
+li<-cbind(2022:2031,forecast_arimali$pred,forecast_thetali,pred_arima_arnnli,forecast_tbatsli$mean,pred_arima_wbfli,pred_theta_arnnli,
+          forecast_SETARli,forecast_ANNli,forecast_BSTSli$mean,forecast_ARFIMAli$mean )
+
+dc<-cbind(2022:2031,forecast_arimadc$pred,forecast_thetadc,forecast_tbatsdc$mean,pred_arima_arnndc,pred_arima_wbfdc,pred_theta_arnndc,forecast_SETARdc,forecast_ANNdc,forecast_BSTSdc$mean,forecast_ARFIMAdc$mean)
+
+
+```
+
+
+
+```{r}
+# Fit simple least-squares lines for all sites.
+ls_fit <- lm(bloom_doy ~ location * year, data = cherry, subset = year >= 1880)
+# Compute the predictions for all 3 sites
+predictions <- expand_grid(location = unique(cherry$location),
+                           year = 1880:2031) %>% 
+  bind_cols(predicted_doy = predict(ls_fit, newdata = .))
+
+predky<-subset(predictions,location=="kyoto" & year>2021)[,3]
+predli<-subset(predictions,location=="liestal"& year>2021)[,3]
+preddc<-subset(predictions,location=="washingtondc"& year>2021)[,3]
+ky<-round(cbind(ky,predky))
+li<-round(cbind(li,predli))
+dc<-round(cbind(dc,preddc))
+write.csv(ky, "predictions.kyoto.csv")
+write.csv(li, "predictions.liestal.csv")
+write.csv(dc, "predictions.washingtonDC.csv")
+#############train-test model showed Theta-ARNN performing the best among all methods 
+finalprediction<-cbind(2022:2031,as.numeric(ky[,6]),as.numeric(li[,6]),as.numeric(dc[,6]))
+
+avgpred<-apply(finalprediction[,-1],1,mean)
+#########Extrapolating for Vancouver, BC
+fit_thetavc=thetaf(as.ts(avgpred), h=10)
+fit_res_TARNNvc = nnetar(fit_thetavc$residuals, repeats = 500)
+pred_res_TARNNvc = forecast::forecast(fit_res_TARNNvc, h = 10)
+pred_theta_arnnvc = predict(fit_thetavc, 10)$mean + pred_res_TARNNvc$mean
+finalpred<-cbind(finalprediction,as.numeric(round(pred_theta_arnnvc)))
+colnames(finalpred)<-c("Year","Kyoto","Liestal","Washington DC","Vancouver")
+write.csv(finalpred,"cherry-blossom-predictions.csv")
+#' @return date string
+doy_to_date <- function (year, doy) {
+  strptime(paste(year, doy, sep = '-'), '%Y-%j') %>% # create date object
+    strftime('%Y-%m-%d') # translate back to date string in ISO 8601 format
+}
+predicted_dateky = doy_to_date(finalpred[,1], finalpred[,2])
+predicted_dateli = doy_to_date(finalpred[,1], finalpred[,3])
+predicted_datedc = doy_to_date(finalpred[,1], finalpred[,4])
+predicted_datevc = doy_to_date(finalpred[,1], finalpred[,5])
+preddates<-cbind(finalpred,predicted_dateky,predicted_dateli,predicted_datedc,predicted_datevc)
+write.csv(preddates,"dates.csv")
+finalpred
+preddates
+data<-finalpred[,2:5]
+matplot(data, type = "b",pch=1,col = 1:4)
+legend("topright", legend = c("Kyoto","Liestal","DC","Vancuover"), col=1:4, pch=1)
+```
+
