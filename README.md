@@ -5,11 +5,11 @@ cherry-blossom-predictions.csv inside the peak-bloom-prediction-main.zip file co
 
 Peak Bloom Prediction Analysis.pdf inside the peak-bloom-prediction-main.zip file contains the analysis results.
 
-predictions.kyoto.csv inside the peak-bloom-prediction-main.zip file contains the predicted peak bloom dates by 12 methods for Kyoto.
+predictions.kyoto.csv inside the peak-bloom-prediction-main.zip file contains the predicted peak bloom dates by 10 methods for Kyoto.
 
-predictions.liestal.csv inside the peak-bloom-prediction-main.zip file contains the predicted peak bloom dates by 12 methods for Liestal.
+predictions.liestal.csv inside the peak-bloom-prediction-main.zip file contains the predicted peak bloom dates by 10 methods for Liestal.
 
-predictions.washingtonDC.csv inside the peak-bloom-prediction-main.zip file contains the predicted peak bloom dates by 12 methods for DC.
+predictions.washingtonDC.csv inside the peak-bloom-prediction-main.zip file contains the predicted peak bloom dates by 10 methods for DC.
 
 dates.csv inside the peak-bloom-prediction-main.zip file contains the predicted peak bloom dates for 2022-2031
 
